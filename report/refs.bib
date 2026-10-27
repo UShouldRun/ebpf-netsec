@@ -1,0 +1,116 @@
+% ---------------------------------------------------------------------------
+% Papers (PDFs in ../refs/papers/ where open access)
+% ---------------------------------------------------------------------------
+
+@inproceedings{findlay2020bpfbox,
+  author    = {William Findlay and Anil Somayaji and David Barrera},
+  title     = {bpfbox: Simple Precise Process Confinement with {eBPF}},
+  booktitle = {Proceedings of the 2020 ACM SIGSAC Conference on Cloud Computing Security Workshop (CCSW '20)},
+  publisher = {ACM},
+  year      = {2020},
+  doi       = {10.1145/3411495.3421358},
+}
+
+@misc{findlay2021bpfcontain,
+  author        = {William Findlay and David Barrera and Anil Somayaji},
+  title         = {{BPFContain}: Fixing the Soft Underbelly of Container Security},
+  year          = {2021},
+  eprint        = {2102.06972},
+  archiveprefix = {arXiv},
+  url           = {https://arxiv.org/abs/2102.06972},
+}
+
+@inproceedings{he2023crosscontainer,
+  author    = {Yi He and Roland Guo and Yunlong Xing and Xijia Che and Kun Sun and Zhuotao Liu and Ke Xu and Qi Li},
+  title     = {Cross Container Attacks: The Bewildered {eBPF} on Clouds},
+  booktitle = {32nd USENIX Security Symposium (USENIX Security 23)},
+  publisher = {USENIX Association},
+  year      = {2023},
+  url       = {https://www.usenix.org/conference/usenixsecurity23/presentation/he},
+}
+
+@inproceedings{hoiland2018xdp,
+  author    = {Toke H{\o}iland-J{\o}rgensen and Jesper Dangaard Brouer and Daniel Borkmann and John Fastabend and Tom Herbert and David Ahern and David Miller},
+  title     = {The {eXpress} Data Path: Fast Programmable Packet Processing in the Operating System Kernel},
+  booktitle = {Proceedings of the 14th International Conference on Emerging Networking EXperiments and Technologies (CoNEXT '18)},
+  publisher = {ACM},
+  year      = {2018},
+  pages     = {54--66},
+  doi       = {10.1145/3281411.3281443},
+}
+
+@article{vieira2020survey,
+  author  = {Marcos A. M. Vieira and Matheus S. Castanho and Racyus D. G. Pac{\'i}fico and Elerson R. S. Santos and Eduardo P. M. C{\^a}mara J{\'u}nior and Luiz F. M. Vieira},
+  title   = {Fast Packet Processing with {eBPF} and {XDP}: Concepts, Code, Challenges, and Applications},
+  journal = {ACM Computing Surveys},
+  volume  = {53},
+  number  = {1},
+  year    = {2020},
+  doi     = {10.1145/3371038},
+}
+
+@inproceedings{gershuni2019prevail,
+  author    = {Elazar Gershuni and Nadav Amit and Arie Gurfinkel and Nina Narodytska and Jorge A. Navas and Noam Rinetzky and Leonid Ryzhyk and Mooly Sagiv},
+  title     = {Simple and Precise Static Analysis of Untrusted {Linux} Kernel Extensions},
+  booktitle = {Proceedings of the 40th ACM SIGPLAN Conference on Programming Language Design and Implementation (PLDI '19)},
+  publisher = {ACM},
+  year      = {2019},
+  pages     = {1069--1084},
+  doi       = {10.1145/3314221.3314590},
+}
+
+@inproceedings{jia2023untenable,
+  author    = {Jinghao Jia and Raj Sahu and Adam Oswald and Dan Williams and Michael V. Le and Tianyin Xu},
+  title     = {Kernel Extension Verification is Untenable},
+  booktitle = {Proceedings of the 19th Workshop on Hot Topics in Operating Systems (HotOS '23)},
+  publisher = {ACM},
+  year      = {2023},
+  pages     = {150--157},
+  doi       = {10.1145/3593856.3595892},
+}
+
+% ---------------------------------------------------------------------------
+% Documentation and projects (contextual reading from the assignment brief)
+% ---------------------------------------------------------------------------
+
+@misc{kernel-bpf-docs,
+  author = {{The Linux Kernel Documentation}},
+  title  = {{BPF} Documentation},
+  url    = {https://docs.kernel.org/bpf/},
+  note   = {Accessed 2026-10-27},
+}
+
+@misc{kernel-bpf-verifier,
+  author = {{The Linux Kernel Documentation}},
+  title  = {{eBPF} Verifier},
+  url    = {https://docs.kernel.org/bpf/verifier.html},
+  note   = {Accessed 2026-10-27},
+}
+
+@misc{kernel-bpf-lsm,
+  author = {{The Linux Kernel Documentation}},
+  title  = {{LSM} {BPF} Programs},
+  url    = {https://docs.kernel.org/bpf/prog_lsm.html},
+  note   = {Accessed 2026-10-27},
+}
+
+@misc{cilium-bpf-guide,
+  author = {{Cilium Authors}},
+  title  = {{BPF} and {XDP} Reference Guide},
+  url    = {https://docs.cilium.io/en/stable/reference-guides/bpf/},
+  note   = {Accessed 2026-10-27},
+}
+
+@misc{tetragon,
+  author = {{Cilium Authors}},
+  title  = {Tetragon: {eBPF}-based Security Observability and Runtime Enforcement},
+  url    = {https://tetragon.io/docs/},
+  note   = {Accessed 2026-10-27},
+}
+
+@misc{libbpf-bootstrap,
+  author = {{libbpf Authors}},
+  title  = {libbpf-bootstrap: Scaffolding for {BPF} Application Development with libbpf and {BPF} {CO-RE}},
+  url    = {https://github.com/libbpf/libbpf-bootstrap},
+  note   = {Accessed 2026-10-27},
+}
