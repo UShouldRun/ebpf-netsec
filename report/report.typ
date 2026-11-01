@@ -24,10 +24,11 @@
     critiques. Defense systems are then compared as architectures:
     production (Cilium, Tetragon) against research (bpfbox, BPFContain),
     finding that policy authorship, not capability, separates them. We
-    close with a prototype proposal for Assignment #2, a continuous
-    process profiler feeding a rule-based malware detector, with
-    evaluation criteria tying detection fidelity and overhead to the
-    least-privilege deployment the threat model demands.
+    close with a prototype proposal for Assignment \#2, a two-layer
+    firewall (XDP for packets, cgroup/socket hooks for workloads), with
+    evaluation criteria tying enforcement correctness and cost against
+    nftables to the least-privilege deployment the threat model demands,
+    and an implementation roadmap.
   ],
 )
 
@@ -41,11 +42,15 @@
 #pagebreak()
 
 #outline(
+  title: [List of Figures],
+  target: figure.where(kind: image),
+)
+
+#outline(
   title: [List of Tables],
   target: figure.where(kind: table),
 )
 
-#pagebreak()
 
 #heading(numbering: none, outlined: false)[List of Acronyms]
 
@@ -68,7 +73,6 @@
   [CIDR],        [Classless Inter-Domain Routing],
   [DDoS],        [Distributed Denial of Service],
   [YAML],        [YAML Ain't a Markup Language],
-  [kLOC],        [Thousand Lines Of Code],
   [FPR],         [False Positive Rate],
   [QEMU],        [Quick Emulator],
   [KVM],         [Kernel-based Virtual Machine],
@@ -126,14 +130,15 @@ contributions:
   the same design space of hooks × programs × maps × control plane;
 - a threat model for eBPF itself, assembling the verifier-as-TCB
   critique and the cross-container attack literature into adversaries
-  and mitigations, which the prototype of Assignment #2 will partially
+  and mitigations, which the prototype of Assignment \#2 will partially
   validate.
 
 The remainder follows that order: §2 the execution and safety model,
 §3 hook points and use cases, §4 security systems, §5 the threat model
 against eBPF, §6 limitations and open challenges, §7 the proposed
-prototype and its evaluation criteria, and §8 the implementation
-roadmap.
+prototype and its evaluation criteria, §8 ethical and legal
+considerations, §9 the conclusion and §10 the implementation roadmap
+for Assignment \#2.
 
 #pagebreak()
 
@@ -174,9 +179,11 @@ requirement is certainty about all executions, including inputs an
 attacker crafts, before the program ever runs, runtime mechanisms are
 categorically insufficient: a sandbox needs a floor below the kernel
 and there is none. Testing only covers the inputs somebody thought
-of @kernel-bpf-verifier. The verifier therefore *proves* safety by
-static analysis over all reachable paths, in two passes over a
-directed-acyclic graph of the program's control flow @hoiland2018xdp.
+of. The verifier therefore *proves* safety by
+static analysis over all reachable paths, in two steps: a check that the
+control-flow graph is a directed acyclic graph, then a simulation of every
+instruction along all paths, with state pruning where an already-verified
+state covers a new branch @kernel-bpf-verifier @hoiland2018xdp.
 
 The proof tracks an abstract state: register types, pointer offsets
 and possible value ranges, through every path, enforcing three
@@ -210,10 +217,10 @@ verified. The analysis is also an
 over-approximation: at merge points, states are unioned and precision
 is lost, so correct programs can be rejected, the practical cost of
 which grows with program complexity, as Jia et al. argue
-@jia2023untenable. PREVAIL @gershuni2019prevail formalizes the same
-analysis as an abstract interpretation with a machine-checked
-soundness argument, precisely to address what the hand-written
-in-kernel verifier cannot prove about itself.
+@jia2023untenable. Improving the verifier itself is the community's main response:
+PREVAIL @gershuni2019prevail reimplements the analysis in user space as
+an abstract interpretation, alongside fuzzing and formal verification of
+the existing verifier and JIT @jia2023untenable.
 
 == Maps, ring buffers and helpers
 
@@ -234,7 +241,9 @@ include hash maps (key $->$ value lookup, e.g. per-IP counters), arrays
 (index $->$ value), LPM tries (longest-prefix match, the data structure
 behind CIDR-based policy), per-CPU variants (each CPU has its own copy,
 so hot-path updates never take a lock), and ring buffers, which
-stream events to user space with per-CPU buffers and reserved records.
+stream events to user space through a single buffer shared by all CPUs,
+with reserve/commit records, replacing the older per-CPU perf buffer
+@kernel-bpf-ringbuf.
 Helpers and kfuncs are the kernel-provided interface a program calls to
 do anything beyond pure computation: map lookup, packet manipulation,
 getting the current process and cgroup identity, redirecting a packet.
@@ -251,10 +260,10 @@ exploit @he2023crosscontainer.
 == Portability: BTF and CO-RE
 
 An eBPF program compiled against one kernel's structures will not load on
-another: offsets of fields in `struct` sock, or even the presence of a
+another: offsets of fields in `struct sock`, or even the presence of a
 field, differ across kernel versions and configurations. The classic
-answers, or compile per kernel, or require vendors to keep stable
-kernels,  both break the "policy as data" deployment model of §2.3.
+answers, either compiling per kernel or requiring vendors to keep stable
+kernels, both break the "policy as data" deployment model of §2.3.
 
 BPF CO-RE ("Compile Once, Run Everywhere") fixes this with a division of
 labour @libbpf-bootstrap @kernel-bpf-docs:
@@ -285,24 +294,29 @@ research systems of @section-systems make.
 The privilege model is separate from and older than the verifier: it
 decides who may reach the `bpf()` system call's privileged commands at all.
 
-- *Root as gatekeeper.* Historically, loading eBPF programs required
-  `CAP_SYS_ADMIN` , but  the verifier prevents harm to the kernel, but
-  whoever can load programs already holds kernel-wide power
-  @hoiland2018xdp.
-- *The modern split.* Since kernel 5.8 the monolith is divided: loading
-  programs uses `CAP_BPF` (plus `CAP_PERFMON` for kprobes/tracepoint and
-  `CAP_NET_ADMIN` for network-attached programs),  narrow, purpose-built
-  capabilities instead of "effectively root".
-- *Unprivileged BPF.* Classic-BPF filters (socket filters, seccomp) are
-  loadable without privileges; `kernel.unprivileged_bpf_disabled` disables
-  exactly this path and distributions increasingly ship it off by default
-  [1][2].
-- *Delegation without privilege.* A container or service should be able to
-  load *its own* programs without holding host capabilities. The BPF token
-  mechanism (merged for kernel 6.9's bpffs delegation) enables this: a
-  privileged manager creates a token tied to a bpffs subtree and hands the
-  token's file descriptor to the container, which can then load programs
-  and create maps, scoped to that subtree, not to the host [3][4].
+- *Root as gatekeeper*: Historically, loading eBPF programs required
+  root (`CAP_SYS_ADMIN`). The verifier prevents harm to the kernel, but
+  it cannot judge intent, so it is left to the administrator to decide
+  which programs may be loaded @hoiland2018xdp.
+- *The modern split*: Since Linux 5.8, `CAP_BPF` separates BPF
+  operations from the overloaded `CAP_SYS_ADMIN`, with `CAP_PERFMON` for
+  tracing and `CAP_NET_ADMIN` for network-attached programs: narrow,
+  purpose-built capabilities instead of "effectively root"
+  @man-capabilities @he2023crosscontainer.
+- *Unprivileged BPF*: The sysctl `kernel.unprivileged_bpf_disabled`
+  controls whether a process without `CAP_SYS_ADMIN` or `CAP_BPF` may call
+  `bpf()` at all (0 allowed, 1 disabled until reboot, 2 disabled but
+  reversible by an admin). Kernels built with `BPF_UNPRIV_DEFAULT_OFF`
+  default to 2 @kernel-sysctl. Classic BPF (socket filters, seccomp) uses
+  its own interfaces and is not affected by this switch.
+- *Delegation without privilege*: A container or service should be able to
+  load *its own* programs without holding host capabilities. A BPF token
+  enables this: a privileged process creates the token from a bpffs
+  instance mounted with `delegate_cmds`, `delegate_maps`, `delegate_progs`
+  and `delegate_attachs` options and hands its file descriptor to the
+  container. `bpf()` calls carrying the token then succeed only for the
+  delegated operations, and only with capabilities held in the container's
+  own user namespace, not on the host @lwn-bpf-token.
 
 The distinction matters for the threat model of section 5: every "who may
 load what" question is answered on this layer, not the verifier's.
@@ -319,19 +333,29 @@ can enforce and what each decision costs. XDP runs in the driver
 *before* the socket buffer (`sk_buff`/skb) exists, so the program sees the raw frame and
 parses headers itself and its drop is the cheapest decision the kernel
 can make about a packet, which is why it is the first-line defense
-against volumetric attacks @hoiland2018xdp. tc hooks sit after the skb
-is built: parsed headers, flow state and marks are already available,
+against volumetric attacks @hoiland2018xdp @cilium-bpf-guide. tc hooks
+sit after the skb is built, at ingress or egress, and read skb fields
+such as marks and priority @cilium-bpf-guide,
 so decisions that depend on stack context (per-flow classification,
 rate limiting, egress filtering) belong there. Tracepoints and
 kprobes are not on the packet path at all: they attach to kernel
 execution and observe the arguments of kernel functions (stable
 pre-chosen events vs. near-arbitrary instructions, stability against
 reach). cgroup/socket hooks see operations of a workload's sockets.
-BPF LSM attaches to the kernel's permission checks and is the only
-hook whose return value is a *verdict*: it is what turns a system from
-observation into enforcement @kernel-bpf-lsm. The rule for choosing is
-derived from position, not speed: *attach where the information you
-need comes into existence.*
+BPF LSM attaches to the kernel's permission checks: its return value
+is a verdict on an operation rather than on a packet (deny with an error
+such as `-EPERM`), which is what turns a host-security system from
+observation into enforcement @kernel-bpf-lsm. @fig-hooks places each
+hook on the receive path. The rule for choosing is derived from position,
+not speed: *attach where the information you need comes into existence.*
+
+#figure(
+  image("figures/hooks.svg", width: 100%),
+  caption: [Where each eBPF hook sits in the kernel. The receive path runs
+  bottom to top; `sk_buff` allocation separates XDP from every later
+  network hook. kprobes and tracepoints can observe any layer but cannot
+  return a verdict.],
+) <fig-hooks>
 
 #figure(
   caption: [Security-relevant eBPF hooks.],
@@ -356,15 +380,18 @@ stack context and under attack the weapon is *cost per packet*, so
 the deciding factor is which drop is cheapest. XDP is the answer: the
 program parses IP/TCP headers itself and drops the flood before the
 kernel allocates a `sk_buff`, so the attack's packets never cost more
-than a few instructions each; the XDP paper's DoS experiment shows
-mitigation at line rate while the stack is saturated @hoiland2018xdp.
+than a few instructions each; in the XDP paper's DoS experiment, TCP
+throughput without the filter halves at 3 Mpps of attack traffic, while
+with the XDP filter it stays stable up to 19.5 Mpps, about 10 Gbps of
+minimum-size packets on a single core @hoiland2018xdp.
 State the filter needs between packets (per-source counters, rate
 windows) lives in per-CPU maps, so the hot path never contends. tc
 *can* filter the same bytes, but each drop happens after the skb is
 already paid for: the wrong economics for a flood, the right ones
 once per-flow state or egress policy matters. The conventional
-baseline, nftables, sits in the stack after skb allocation; comparing
-the two is Assignment #2's throughput measurement.
+baseline, nftables, sits in the stack after skb allocation. Comparing
+the two is the natural throughput measurement for an XDP filter, and the
+brief names it as the conventional baseline.
 
 == Use case B: container-aware connection control
 
@@ -388,7 +415,8 @@ from the network. It is also BPFContain's starting point, one hook family
 further out: attach to the LSM checks that guard socket operations and
 the same policy now covers containers uniformly, with credentials in the
 context rather than in the socket @findlay2021bpfcontain @kernel-bpf-lsm.
-Both use cases together define the scope for Assignment #2: XDP answers
+Both use cases together define the scope for Assignment \#2
+(@section-prototype): XDP answers
 "what may this packet do", the socket/LSM family answers "what may this
 workload do" and a secure system needs the answer to both.
 
@@ -399,19 +427,22 @@ workload do" and a secure system needs the answer to both.
 == Production: Cilium and Tetragon
 
 Cilium applies the eBPF substrate to *networking policy*: instead of IP
-addresses and port rules, it identifies workloads by labels carried into the
-kernel as identity and enforces policy at the L3/L4 and HTTP layers
-@cilium-bpf-guide. Enforcement attaches where the traffic already flows, 
-XDP or tc at ingress/egress and socket-level programs for per-workload
-rules, so the same identity model drives routing, load balancing and
-policy in one place.
+addresses and port rules, it derives a security identity for each pod from
+its labels, shared by pods with the same labels @cilium-identity. L3/L4
+policy is enforced by eBPF programs where the traffic already flows (XDP
+or tc at ingress/egress, socket-level programs for per-workload rules)
+@cilium-bpf-guide, while L7 (e.g. HTTP) rules are handed to an Envoy proxy
+in user space @cilium-envoy. The same identity model thus drives routing,
+load balancing and policy in one place.
 
 Tetragon, from the same ecosystem, targets *process and kernel behaviour*
-rather than the network: tracing policies attach kprobes and tracepoints to
-security-relevant kernel functions, correlate events with the process,
-credentials and container that caused them and can enforce by denying the
-call before it completes @tetragon. Because a policy is data  ( YAML saying
-"watch these functions, filter on these arguments" ),  the in-kernel logic
+rather than the network: tracing policies attach kprobes, tracepoints and
+uprobes to security-relevant kernel functions, filter in the kernel on
+arguments and on Kubernetes namespaces and pod labels, and can enforce
+inline: overriding the return value so the call never runs, or sending a
+signal such as `SIGKILL` to the process @tetragon. Because a policy is data
+(a Kubernetes custom resource saying "watch these functions, filter on
+these arguments"), the in-kernel logic
 stays generic while the site-specific rules live in user space, the same
 split as §2.3's maps.
 
@@ -424,22 +455,25 @@ one coherent mechanism.
 
 bpfbox is the proof of concept: per-process confinement policies that can
 restrict at the *userspace function*, *system call*, *LSM hook* and
-*kernelspace function* boundaries,  granularity no existing mechanism
-offers, in under 2000 lines of in-kernel code @findlay2020bpfbox. A policy
+*kernelspace function* boundaries, a granularity no existing mechanism
+offers, in under 2000 lines of in-kernel code, using LSM programs for
+enforcement and uprobes, kprobes and scheduler tracepoints to track
+process state @findlay2020bpfbox. A policy
 can require, for example, that `execve` calls originate in a specific
 function of the confined binary, not just that certain binaries may be
 executed. In its web-server benchmark, alerting on every security operation
-costs about 8.4% throughput,  slightly less than AppArmor in a comparable
-configuration,  showing the generality is affordable.
+costs about 8.4% throughput, slightly less than AppArmor in a comparable
+configuration, showing the generality is affordable.
 
 BPFContain, by the same authors, generalizes bpfbox from processes to
 *containers*: a YAML policy language with default-deny and default-allow
 modes, semantically meaningful permissions on top of the raw LSM API and
-integration with existing container managers without modifying their source
-@findlay2021bpfcontain. Its diagnosis is the inverse of Tetragon's
+integration with existing container managers without modifying their source.
+Its prototype uses 38 LSM programs, two fentry programs, two scheduler
+tracepoints and one uprobe @findlay2021bpfcontain. Its diagnosis is the inverse of Tetragon's
 opportunity: the kernel has no unified container abstraction, so isolation
 is today a mishmash of mechanisms whose combined policies are hard to
-audit and a failure in anyone of them exposes the container. eBPF's LSM hooks
+audit and a failure in any one of them exposes the container. eBPF's LSM hooks
 close that semantic gap at runtime, with no kernel patches.
 
 == Comparison
@@ -449,10 +483,10 @@ close that semantic gap at runtime, with no kernel patches.
   table(
     columns: (auto, 1fr, 1fr, 1fr, 1fr),
     table.header[System][Policy level][Hooks used][Identity][Reported overhead],
-    [Cilium],     [Labels → identity; L3/L4 + HTTP rules], [XDP, tc, socket], [Workload labels shared kernel-wide], [None published; claims in-kernel filtering keeps agent cost off the data plane],
+    [Cilium],     [Labels → identity; L3/L4 in eBPF, L7 via Envoy], [XDP, tc, socket], [Workload labels shared kernel-wide], [None published; claims in-kernel filtering keeps agent cost off the data plane],
     [Tetragon],   [YAML tracing/enforcement policies],      [kprobes, tracepoints], [Process / container from events], [None published; in-kernel filtering bounds per-event cost],
-    [bpfbox],     [Confinement policy, per-process],        [LSM hooks + kprobes],  [Process under confinement], [≈8.4% web-server throughput, under 2000 kLOC],
-    [BPFContain], [YAML, container-level, default-deny/allow], [LSM hooks + critical functions], [Container], [Under 16% across Phoronix benchmarks, on par with AppArmor],
+    [bpfbox],     [Confinement policy, per-process],        [LSM + uprobes, kprobes, tracepoints],  [Process under confinement], [≈8.4% web-server throughput; under 2000 lines in-kernel],
+    [BPFContain], [YAML, container-level, default-deny/allow], [LSM + fentry, tracepoints, uprobe], [Container], [Under 16% across Phoronix benchmarks, on par with AppArmor],
   ),
 ) <systems-table>
 
@@ -461,12 +495,12 @@ BPFContain publish benchmark methodologies and numbers (web-server
 throughput, Phoronix suites vs. AppArmor), while neither Cilium nor
 Tetragon publishes comparable figures, reporting only qualitative
 claims of low overhead from in-kernel filtering. This asymmetry is
-itself a finding, one the prototype of Assignment #2 will treat as a
+itself a finding, one the prototype of Assignment \#2 will treat as a
 baseline to produce.
 
 The two lines answer different questions. Production systems assume the
-orchestration model and buy into it,  identity from labels, events from
-the runtime,  trading generality for operational simplicity. Research
+orchestration model and buy into it (identity from labels, events from
+the runtime), trading generality for operational simplicity. Research
 systems start from the threat model: what a confined process should be
 able to do, expressed directly against kernel boundaries, at the cost of
 writing and auditing policy without a manager's help. The substrate is the
@@ -481,12 +515,12 @@ API the policy reaches.
 
 The assets are kernel integrity (memory, control flow, module state), the
 isolation between containers sharing a kernel, the integrity of policy and
-telemetry consumed by the systems of @section-systems, and secrets that live
+telemetry consumed by the systems of @section-systems and secrets that live
 in kernel memory or in other containers' address spaces.
 
 The trust boundaries cross twice. In the loading path, untrusted bytecode
 crosses from user space into the kernel at the `bpf()` syscall: the verifier
-and JIT are the gate, and everything they let through is trusted at
+and JIT are the gate and everything they let through is trusted at
 runtime @jia2023untenable. In the shared-kernel path there is no boundary at
 all for tracing programs: a program attached inside container A can read
 processes and memory of the host and of container B, because eBPF tracing
@@ -502,77 +536,93 @@ agent is out of scope.
 
 == Adversaries and attacks
 
-- *Malicious or compromised loader.* Whoever controls the loader can decide
+- *Malicious or compromised loader*: Whoever controls the loader can decide
   which programs are attached, but cannot make the verifier accept unsafe
   bytecode. The real risk is weaker: a loader with ambient
   `CAP_SYS_ADMIN`/`CAP_BPF` privilege that loads unsigned programs is a
-  supply-chain choke point, since program provenance is not checked
+  supply-chain choke point, since program provenance is not checked. He
+  et al. note that eBPF malware can enter through poisoned container
+  images @he2023crosscontainer, and Jia et al. propose signing extensions
+  in a trusted toolchain and checking the signature at load time
   @jia2023untenable.
-- *Over-privileged container.* A container granted eBPF capabilities can use
+- *Over-privileged container*: A container granted eBPF capabilities can use
   tracing features (kprobes, raw tracepoints) to read any process's memory
   and opened files across containers (`bpf_probe_read_user`) and to kill any
   process (`bpf_send_signal`) with no kernel exploit at all
-  @he2023crosscontainer. The attacker needs one of `CAP_SYS_ADMIN`, or
-  `CAP_BPF` plus `CAP_PERFMON`; over 2.5% of Docker Hub images He et al.
-  measured already have the required permissions.
-- *Unsafe helper or program type.* Helpers are escape hatches around the
-  verifier's restrictions, and they also escape its guarantees: a
-  fully-verified program that calls `bpf_probe_write_user` writes arbitrary
-  process memory @jia2023untenable. Similarly, map-tamper attacks use
+  @he2023crosscontainer. The attacker needs either `CAP_SYS_ADMIN`, or
+  `CAP_BPF` plus `CAP_PERFMON`; about 2.5% of the active Docker Hub
+  repositories He et al. measured already grant the required permissions.
+- *Unsafe helper or program type*: Helpers are unverified kernel
+  functions that serve as escape hatches around the verifier's
+  restrictions, and they also escape its guarantees: Jia et al. crashed
+  the kernel from a verified program through a bug in `bpf_sys_bpf` (later
+  a CVE) @jia2023untenable, and a fully-verified program that calls
+  `bpf_probe_write_user` writes arbitrary process memory
+  @he2023crosscontainer. Similarly, map-tamper attacks use
   `bpf_map_get_fd_by_id` to reach another program's maps, paralyzing
   systems like Tetragon or Datadog by deleting their tail-call maps
   @he2023crosscontainer.
-- *Verifier and JIT bugs as kernel attack surface.* The verifier itself is
-  complex C code (thousands of lines, growing with every helper), and
+- *Verifier and JIT bugs as kernel attack surface*: The verifier itself is
+  complex C code (thousands of lines, growing with every helper) and
   has had at least 22 bugs in two years @jia2023untenable; a verifier bug
   (e.g. CVE-2022-23222, missing pointer validation) turns unprivileged
-  bytecode into arbitrary kernel read/write, and a JIT bug lets
+  bytecode into arbitrary kernel read/write and a JIT bug lets
   verified-safe code hijack kernel control flow.
-- *Policy bypass.* Semantic gaps and races: a hook that fires on a decision
-  may see different state than the decision will act on (TOCTOU between
-  check and use); a rule written against one hook may miss the intent it
-  was written for (the DDoS rule at XDP vs. the same intent at tc);
-  and under load, ring-buffer events can be dropped, so user-space
-  enforcement that depends on them can fail open (the drift between
-  Tetragon's pre-call filters and its agent-side audit).
+- *Policy bypass*: Semantic gaps and races. He et al. show that all the
+  existing LSM-based eBPF access-control tools they tested are vulnerable
+  to *process identity confusion*: an attacker creates a process with the
+  same path or PID as an allow-listed one inside the container and
+  inherits its permissions @he2023crosscontainer. More generally, a hook
+  that fires on a decision may see different state than the decision will
+  act on (TOCTOU between check and use); a rule written against one hook
+  may miss the intent it was written for (the DDoS rule at XDP vs. the
+  same intent at tc); and, under load, ring-buffer events can be dropped,
+  so enforcement done in user space from those events can fail open.
 
 == Mitigations
 
 Four layers, from broadest to narrowest. Disable unprivileged eBPF
-(`kernel.unprivileged_bpf_disabled`, default on modern distributions) so the
-syscall itself requires capability. Restrict capabilities per container
+(`kernel.unprivileged_bpf_disabled`, which defaults to 2 on kernels built
+with `BPF_UNPRIV_DEFAULT_OFF`) so the syscall itself requires capability
+@kernel-sysctl. Restrict capabilities per container
 (deny `CAP_SYS_ADMIN`/`CAP_BPF`/`CAP_PERFMON` by default; a BPF token
-delegates a narrow subset through a bpffs fd) so a compromised container
-still cannot load. Constrain what loaded programs may do: LSM-based tools
-(bpfbox, BPFContain) mediate the dangerous helpers and program types
-themselves, which is the eBPF permission model He et al. propose
-@he2023crosscontainer. Audit provenance and behavior at runtime: sign or
-fingerprint programs at load, and watch for the map-tamper pattern
+delegates a narrow subset through a bpffs fd @lwn-bpf-token) so a
+compromised container still cannot load. Constrain what loaded programs
+may do: He et al. propose CapBits, a permission model that gives each
+process an allow-list of program types, helpers and tracing scope and
+keeps it in kernel-held fields, which also resists the identity-confusion
+attack above @he2023crosscontainer. bpfbox and BPFContain apply the same
+idea to their own state, with an LSM program on `bpf(2)` that stops other
+processes from touching their programs and maps @findlay2020bpfbox
+@findlay2021bpfcontain. Audit provenance and behavior at runtime: sign or
+fingerprint programs at load and watch for the map-tamper pattern
 (`bpf_map_get_fd_by_id` against foreign IDs).
 
-The prototype of Assignment #2 applies the first two: it runs with the
+The prototype of Assignment \#2 applies the first two: it runs with the
 minimum capability set (measured before and after) and on a kernel with
-unprivileged BPF disabled, and its threat-model audit (milestone M5) walks
-each attack above against the deployed configuration.
+unprivileged BPF disabled. Its threat-model audit (milestone M5) walks
+each attack above against the deployed configuration, including a
+map-tamper attempt against its own policy maps.
 
 #pagebreak()
 
 = Limitations and open challenges
 
 The sections above share one theme: eBPF's safety story is a verification
-story, and verification guarantees less than it appears to.
+story and verification guarantees less than it appears to.
 
-*The verifier is part of the TCB, and a growing one.* The verifier
+*The verifier is part of the TCB and a growing one*: The verifier
 guarantees memory safety, termination and type safety for the bytecode it
 accepts @hoiland2018xdp, but it is ad-hoc C code that has grown with every
-helper and program type, has had at least 22 bugs in two years, and admits
+helper and program type, has had at least 22 bugs in two years and admits
 escape hatches (helpers) that bypass the very guarantees it exists to
 provide @jia2023untenable. The community responses under way, fuzzing,
 verifying the verifier, or proof-carrying code, all assume the verifier
 stays; Jia et al. argue the deeper fix is moving extensions to a safe
-language (Rust) with runtime checks, eliminating the in-kernel verifier.
+language (Rust) with signed toolchains and lightweight runtime checks,
+eliminating the in-kernel verifier.
 
-*Helpers weaken the guarantee at the boundary.* A verified program calling
+*Helpers weaken the guarantee at the boundary*: A verified program calling
 `bpf_probe_write_user` writes arbitrary process memory; one calling
 `bpf_map_get_fd_by_id` reaches another program's maps. The verifier cannot
 help, because the hazard is in what the helpers are *for* (tracing,
@@ -581,70 +631,76 @@ threat model of @he2023crosscontainer exists at all: no kernel bug is
 needed, only a container with eBPF capability and a kernel that permits
 these helpers.
 
-*Observability and enforcement trade availability for precision.* Hooks
+*Observability and enforcement trade availability for precision*: Hooks
 that merely observe (kprobes, tracepoints) are cheap and everywhere; hooks
 that enforce (XDP drop, BPF LSM verdict) stand in the data or execution
 path, where a false positive drops legitimate traffic or kills a legitimate
-process, and a bug in the program is a kernel-space outage. Tetragon splits
-the difference by filtering pre-call, but its audit path still crosses to
-user space, where events can be dropped under load.
+process and a bug in the program is a kernel-space outage. Even inline
+enforcement has gaps: Tetragon warns that a `SIGKILL` alone does not
+guarantee that an in-progress operation such as a `write()` is stopped,
+and must be paired with a return-value override @tetragon.
 
-*Portability is solved for structure, not for semantics.* CO-RE handles
+*Portability is solved for structure, not for semantics*: CO-RE handles
 layout differences across kernels @libbpf-bootstrap, but a policy still
 behaves differently across hook ordering changes, LSM sets and kernel
 versions; "compile once, run everywhere" does not free the operator from
 testing per deployment kernel.
 
-*The permission model lags the attack surface.* Capabilities gate the
+*The permission model lags the attack surface*: Capabilities gate the
 loading of programs, but once loaded, tracing programs see the whole
-kernel; the capability split of Linux 5.6 and the BPF token are coarse
+kernel; the capability split of Linux 5.8 and the BPF token are coarse
 answers to a problem @he2023crosscontainer show needs per-program,
 per-process confinement (which is the gap bpfbox and BPFContain
 address at the policy layer).
 
 #pagebreak()
 
-= Proposed prototype and evaluation criteria
+= Proposed prototype and evaluation criteria <section-prototype>
 
 == Scope
 
-A *continuous application-behavior profiler with a detection layer*: an
-eBPF-based collector that streams process- and syscall-level telemetry
-from two hook families, and a user-space consumer that flags the
-behavior patterns of @section-threats as likely malware. No in-kernel
-enforcement, detection only: the security property demonstrated is
-*detection fidelity at deployable overhead*, i.e. that a rule- and
-statistics-based detector over an eBPF event stream can distinguish
-the attacks of the threat model from clean baseline behavior with an
-acceptable false-positive rate and bounded per-event cost.
+A *two-layer eBPF firewall* that turns the two use cases of §3 into one
+small, auditable component. Each layer answers one of the questions
+those use cases separated: XDP answers "what may this packet do", and
+the cgroup/socket layer answers "what may this workload do".
 
-The two hook families answer different questions about the same
-process, and the prototype wants both:
+- *Ingress layer (XDP)*: a program in the driver receive path drops
+  traffic before an `sk_buff` exists. It applies three rule classes held
+  in maps: a CIDR blocklist in an LPM trie, a protocol/port denylist in a
+  hash map, and a per-source packet-rate limit with per-CPU counters, so
+  the hot path never takes a lock. Every verdict increments per-rule
+  counters, and dropped packets are sampled into a ring buffer for
+  logging.
+- *Workload layer (cgroup/socket)*: `connect4`/`connect6` and `bind`
+  hooks attached to each container's cgroup enforce use case B's
+  egress policy. Only allow-listed containers may connect to a given
+  network or port, and no container may bind the host's service ports.
+  The verdict is returned on the socket operation, so no packet is ever
+  parsed.
+- *Controller (user space, libbpf/CO-RE)*: reads a declarative rule file,
+  populates and updates the maps without reloading programs, pins
+  programs and maps in bpffs, and exports counters and drop logs.
 
-- *CPU stack sampling* via a `perf_event`-driven program: periodically
-  sample kernel and user stack traces at a fixed rate, aggregating
-  where a process actually spends time. This is the classic
-  continuous-profiler signal: it answers *what is this process doing*
-  right now, independent of any syscall it makes.
-- *Exec and syscall telemetry* via scheduler tracepoints
-  (sched_switch, sched_process_exec, sched_process_fork/exit) and
-  security-relevant tracepoints/kprobes: which binaries run, with
-  which parentage, and which security-relevant syscalls they make.
-  This answers *what did this process become*, and carries the
-  behavioral signal the detector consumes: exec chains, namespace
-  operations, unusual file access and process manipulation.
+The security property demonstrated is *correct enforcement of a
+defined policy at lower cost than the conventional mechanism*: every
+packet or socket operation matching a rule class is blocked, all other
+traffic passes, and the XDP layer sustains a higher drop rate per CPU
+than nftables applying the same rules. The firewall is also a target
+for the threat model of @section-threats. Its policy lives in maps, so
+the map-tamper attack of He et al. @he2023crosscontainer applies to it
+directly, and the privilege audit is part of the evaluation.
+@fig-prototype shows the whole flow.
 
-The detection layer is a user-space consumer of this stream, using
-standard algorithms rather than anything learned: per-process rate
-thresholds (events per second per binary), n-gram sequence analysis
-over exec and syscall ordering, and simple statistical baselines
-(z-scores over a clean-window profile) compared against the attack
-behaviors of @section-threats: containerized processes attempting
-`bpf_probe_read_user` on foreign memory, unusual exec chains from
-compromised workloads, and namespace-escape attempts. Both layers
-together form one pipeline: profiling as the collection layer,
-detection as the policy applied to it, the same substrate split as
-@section-systems' systems.
+#figure(
+  image("figures/prototype.svg", width: 95%),
+  placement: bottom,
+  caption: [Prototype flow. Inbound packets meet the XDP program in the
+  driver and are dropped or passed before an `sk_buff` exists; container
+  `connect()`/`bind()` calls meet the cgroup hooks. Both read policy
+  from pinned maps that the controller updates at runtime and that feed
+  counters and the drop log back to user space. In baseline runs the XDP
+  program is detached and nftables applies the same rules in the stack.],
+) <fig-prototype>
 
 == Metrics
 
@@ -653,69 +709,49 @@ detection as the policy applied to it, the same substrate split as
   table(
     columns: (auto, 1fr, 1fr),
     table.header[Metric][How it is measured][Target / baseline],
-[Correctness],         [Attacks of @section-threats replayed against a clean baseline: detected / missed / false alarm per attack], [100% of replayed attacks flagged],
-[Throughput / event rate], [Events per second sustained by the full pipeline (probe + ring buffer + consumer) before loss], [Sustains peak telemetry without drops],
-[Latency],             [Time from attack syscall to detector verdict], [Sub-second],
-[CPU overhead],        [`perf stat` and time-series comparison, idle and under benchmark load], [Under 5-10% at 10 Hz sampling],
-[Memory / map usage],  [`bpftool map` sizes: stack aggregation maps, ring-buffer occupancy], [Bounded, no growth over runs],
-[Event loss / false positives], [Ring-buffer drop counter + false-positive rate over a clean-soak window], [Zero drops at target rate; FPR reported, not hidden],
-[Privileges required], [Capabilities required (incl. `perf_event` access) vs. @section-threats’ minimum-privilege mitigation], [Only `CAP_BPF` + `CAP_PERFMON`, no `CAP_SYS_ADMIN`],
+[Enforcement correctness], [Positive and negative test cases per rule class (blocked CIDR, denied port, rate-limited source, container egress deny/allow, host-port bind)], [100% of cases give the expected verdict, at XDP and at the cgroup hooks],
+[Packet rate], [Maximum drop rate (Mpps) with one core, minimum-size packets from a traffic generator, XDP vs. nftables with equivalent rules], [XDP above nftables; ratio reported],
+[Latency], [Added round-trip latency for allowed traffic (request/response benchmark); time from controller rule update to enforcement], [Allowed traffic: within run-to-run noise of no filter; rule update under 1 s],
+[CPU overhead], [Softirq and total CPU at fixed attack rates, XDP vs. nftables vs. no filter], [Lower CPU than nftables at every rate],
+[Memory / map usage], [`bpftool map` sizes for 1k, 10k and 100k CIDR rules; lookup cost vs. rule count], [Bounded, linear in rules; reported per rule],
+[False positives / event loss], [Legitimate flows dropped while a flood runs; ring-buffer drop counter for sampled logs], [Zero legitimate drops outside rate-limited sources; log loss reported, not hidden],
+[Privileges required], [Capabilities needed to load and attach each layer; behaviour when they are removed], [`CAP_BPF` + `CAP_NET_ADMIN`, no `CAP_SYS_ADMIN`, confirmed by the audit],
   ),
 ) <metrics-table>
 
 == Environment
 
-Isolated QEMU/KVM virtual machine(s), snapshot before each run: no
-public Internet targets, all attacks replayed against our own
-processes and containers. Kernel version pinned and recorded (a
-recent LTS with BTF enabled, so CO-RE relocations resolve without a
-patched kernel), clang + libbpf versions recorded with the artefacts.
-Load is generated by the benchmark suites themselves (Phoronix
-tests used by BPFContain's evaluation, plus a traffic generator for
-the network-facing probes), so overhead is measured under the same
-workload the baseline runs. The detector runs natively, not in a
-fallback mode; if the VM lacks `perf_event` access the whole exercise
-stops, since the privilege audit is a deliverable.
+Isolated QEMU/KVM virtual machines on a private virtual network, with a
+snapshot before each run. One VM generates traffic, one runs the
+firewall, and the containers under test run on the firewall VM. There
+are no public Internet targets, and all floods and scans are sent only
+between our own VMs. The kernel version is pinned and recorded (a recent
+LTS with BTF enabled, so CO-RE relocations resolve without a patched
+kernel), and clang, libbpf, bpftool and nftables versions are recorded
+with the artefacts. The XDP attach mode is recorded for every run:
+native (driver) mode on `virtio_net` is the target, and generic (skb)
+mode is reported separately if native mode is unavailable, since generic
+mode pays the `sk_buff` cost that use case A is meant to avoid. Load
+comes from a kernel packet generator for floods and from standard
+throughput and request/response benchmarks for legitimate traffic, so
+both filters are measured under the same workload.
 
 #pagebreak()
-
-= Implementation roadmap for Assignment \#2
-
-#figure(
-  caption: [Milestones, dependencies and validation. Weeks count back from
-  the Assignment \#2 deadline of 6 December 2026 (week of 30 Nov).],
-  table(
-    columns: (auto, 1fr, auto, 1fr, auto),
-    table.header[\#][Milestone and deliverable][Depends on][Validation][Week],
-    [M1], [Minimal program loads and attaches], [TBD],  [`bpftool prog` shows the attached hook], [1],
-    [M2], [User-space controller / telemetry],  [M1], [Events arrive in the ring buffer at idle and under load], [1],
-    [M3], [Policy and test cases],              [M2], [Detector fires on all @section-threats replays, silent on clean soak], [2],
-    [M4], [Benchmark harness and baseline],     [M3], [Metrics table targets met at 10 Hz], [3--4],
-    [M5], [Threat-model validation (privilege audit)], [M3], [Loads and runs with `CAP_BPF` + `CAP_PERFMON` only], [4],
-    [M6], [Reproducibility artefacts and README], [M4, M5], [Fresh clone of the VM reproduces one full run], [5],
-  ),
-) <roadmap-table>
-
 = Ethical and legal considerations
 
 All experiments run in isolated virtual machines under our own
-control, with snapshots taken before each run; nothing touches
+control, with snapshots taken before each run. Nothing touches
 production systems, third-party infrastructure, or the public
-Internet. The offensive techniques surveyed in @section-threats
-(cross-container reads, namespace escapes, credential manipulation)
-are studied as *detections*, and the ones replayed in Assignment \#2
-are replayed only against processes and containers we launched
-ourselves, in the same VM as the detector. The prototype collects
-telemetry from our own workloads only; it is not deployed on any
-system serving real users, so no user data enters the event stream
-and no privacy question arises beyond keeping the artefacts off
-shared infrastructure. The privilege-reduction results of the
-metrics table are the ethical payload of the exercise: if the
-detector needs only `CAP_BPF` and `CAP_PERFMON`, the deployment
-story is one of *less* privilege than the alternatives it replaces,
-not more.
+Internet. The attacks used in Assignment \#2 (packet floods, port
+scans, disallowed container connections, and the map-tamper and
+over-privileged-container scenarios of @section-threats) are generated
+only between VMs and containers we launched ourselves. The firewall
+inspects only synthetic traffic between our own machines, so no user
+data enters the counters or logs. The privilege-audit results of the
+metrics table are the ethical payload of the exercise: if the firewall
+needs only `CAP_BPF` and `CAP_NET_ADMIN`, the deployment story is one
+of *less* privilege than the alternatives it replaces, not more.
 
-#pagebreak()
 
 = Conclusion
 
@@ -732,23 +768,42 @@ actually separates them is not capability but policy authorship: who
 defines identity and what happens when the control plane is
 compromised. Third, and least settled: the verifier that makes all of
 this safe is itself a growing, hand-written trusted computing base,
-one that the literature argues cannot scale as kfuncs and
-extensions multiply @jia2023untenable, and the cross-container
+one that the literature argues cannot scale as helpers and
+program types multiply @jia2023untenable, and the cross-container
 attacks of @he2023crosscontainer show that a shared kernel with
 tracing attached is a shared attack surface regardless of what the
 verifier proved about the programs.
 
 The main open challenge that follows is measurable safety: neither
 production system publishes overhead comparable to the research
-benchmarks, and no system publishes detection fidelity against a
-named threat model. The prototype of Assignment \#2 addresses exactly
-that gap at the smallest useful scale: a continuous profiler feeding
-a rule-based detector, evaluated for detection fidelity, overhead
-and required privilege against the threat model of @section-threats.
-The result, if the metrics table's targets hold, is the pattern this
-report argues for throughout, eBPF deployed as detection with the
-least privilege that still answers the question, with every number
-published.
+benchmarks, and the deployments surveyed rarely state the privileges
+they add. The prototype of Assignment \#2 addresses that gap at the
+smallest useful scale: a two-layer firewall, XDP for packets and
+cgroup/socket hooks for workloads, evaluated for enforcement
+correctness, cost against nftables and required privilege against the
+threat model of @section-threats. The roadmap below sets out how it
+will be built and validated.
+
+#pagebreak()
+
+= Implementation roadmap for Assignment \#2
+
+#figure(
+  caption: [Milestones, dependencies and validation. Weeks count from
+  2 November 2026 to the Assignment \#2 deadline of 6 December 2026.
+  Week 5 (from 30 November) is left free for the Assignment \#2 report
+  and packaging.],
+  table(
+    columns: (auto, 1fr, auto, 1fr, auto),
+    table.header[\#][Milestone and deliverable][Depends on][Validation][Week],
+    [M1], [Minimal XDP program: static CIDR drop with per-CPU counters], [-], [`bpftool prog` shows it attached; counters match packets sent by the generator], [1],
+    [M2], [User-space controller: rule file → LPM trie, port and rate maps; cgroup `connect`/`bind` hooks; ring-buffer drop log], [M1], [Rules added and removed at runtime take effect without reload], [1--2],
+    [M3], [Policy test suite], [M2], [All positive and negative cases of the metrics table pass at both layers], [2],
+    [M4], [Benchmark harness and nftables baseline], [M3], [Packet-rate, CPU, latency and map-size runs repeated and scripted], [3--4],
+    [M5], [Threat-model validation: privilege audit and map-tamper test], [M3], [Loads with `CAP_BPF` + `CAP_NET_ADMIN` only; tampering from a second process is attempted and the result documented], [4],
+    [M6], [Reproducibility artefacts and README], [M4, M5], [Fresh VM from the README reproduces one full run], [4],
+  ),
+) <roadmap-table>
 
 #pagebreak()
 
