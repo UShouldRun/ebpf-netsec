@@ -33,6 +33,50 @@
 
 #pagebreak()
 
+#outline(
+  title: [Table of Contents],
+  indent: auto,
+)
+
+#pagebreak()
+
+#outline(
+  title: [List of Tables],
+  target: figure.where(kind: table),
+)
+
+#pagebreak()
+
+#heading(numbering: none, outlined: false)[List of Acronyms]
+
+#table(
+  columns: (auto, 1fr),
+  stroke: none,
+  align: (left, left),
+  [eBPF],        [Extended Berkeley Packet Filter],
+  [sk_buff/skb], [Socket Buffer],
+  [NIC],         [Network Interface Controller],
+  [XDP],         [eXpress Data Path],
+  [tc],          [Traffic Control],
+  [LSM],         [Linux Security Module],
+  [JIT],         [Just-In-Time compilation],
+  [BTF],         [BPF Type Format],
+  [CO-RE],       [Compile Once, Run Everywhere],
+  [TCB],         [Trusted Computing Base],
+  [TOCTOU],      [Time-Of-Check to Time-Of-Use],
+  [LPM],         [Longest Prefix Match],
+  [CIDR],        [Classless Inter-Domain Routing],
+  [DDoS],        [Distributed Denial of Service],
+  [YAML],        [YAML Ain't a Markup Language],
+  [kLOC],        [Thousand Lines Of Code],
+  [FPR],         [False Positive Rate],
+  [QEMU],        [Quick Emulator],
+  [KVM],         [Kernel-based Virtual Machine],
+  [LTS],         [Long-Term Support],
+)
+
+#pagebreak()
+
 = Introduction
 
 Classic kernel extension mechanisms force a choice: loadable kernel
@@ -44,32 +88,34 @@ the choice by letting untrusted code run *inside* the kernel safely:
 programs are compiled to a small instruction set, statically proven
 safe by an in-kernel verifier before they ever run, JIT-compiled to
 native code, and attached to hook points that span the whole range of
-kernel work  kernel work, from the earliest moment a packet exists from the earliest moment a packet exists (XDP, in the
+kernel work, from the earliest moment a packet exists (XDP, in the
 driver, before any allocation) to the kernel's own permission checks
 (BPF LSM), with maps as shared state between kernel programs and user
 space @kernel-bpf-docs @hoiland2018xdp @kernel-bpf-lsm.
 
 For network security this makes eBPF a *substrate* rather than a
-product: it provides safe programmability at kernel hook points, and
+product: it provides safe programmability at kernel hook points and
 defense systems are built on top of it as architectures of programs,
-maps and user-space control planes. Two things follow, and both
-structure this report. First, the choice of hook is a design decision
-with security consequences  with security consequences: each position in the kernel trades each position in the kernel trades
-visibility for cost, so the same attack is defensible at different
-prices depending on where the defense sits. Second, the substrate is
-itself security-sensitive: the verifier is a large, hand-written
-component of the Trusted Computing Base whose bugs are kernel bugs
-@jia2023untenable, and the systems built on eBPF add their own seams  add their own seams;
-cross-container attacks that confuse the identity mapping or exploit
-the policy data path show the confinement breaking at the joins, not
-the machinery @he2023crosscontainer.
+maps and user-space control planes. Two things follow and both
+structure this report: 
+
+- First, the choice of hook is a design decision with security consequences: 
+  each position in the kernel trades visibility for cost, so the same attack 
+  is defensible at different prices depending on where the defense sits.
+
+- Second, the substrate is itself security-sensitive: the verifier is a large, hand-written
+  component of the Trusted Computing Base whose bugs are kernel bugs
+  @jia2023untenable, and the systems built on eBPF add their own seams;
+  cross-container attacks that confuse the identity mapping or exploit
+  the policy data path show the confinement breaking at the joins, not
+  the machinery @he2023crosscontainer.
 
 This report compares the state of the art along those lines. Its
 contributions:
 
 - a description of the eBPF execution and safety model, the
   load → verify → JIT → attach pipeline, the verifier's three families
-  of checks, and maps as the only durable memory, separating what the
+  of checks and maps as the only durable memory, separating what the
   machinery guarantees from what it does not;
 - a hook-by-hook comparison of the security-relevant attachment points
   (XDP, tc, cgroup/socket, tracepoints/kprobes, BPF LSM), instantiated
@@ -98,14 +144,14 @@ roadmap.
 eBPF programs are compiled from restricted C into bytecode for a small
 register-based virtual machine: eleven 64-bit registers that map
 one-to-one onto hardware registers on the supported 64-bit
-architectures, a fixed instruction set, and a single calling
-convention shared with the C ABI  C ABI, which which is what makes just-in-time
+architectures, a fixed instruction set and a single calling
+convention shared with the C ABI, which is what makes just-in-time
 translation to native code a faithful, mechanical restatement rather
 than a second implementation @hoiland2018xdp @kernel-bpf-docs.
 
 Loading goes through a single entry point, the `bpf()` system call.
 The kernel takes the bytecode, hands it to the verifier
-(@sec-verifier), and only after the proof succeeds passes it to the
+(@sec-verifier) and only after the proof succeeds does it pass to the
 JIT compiler, which translates each instruction to a small block of
 native machine code with no runtime checks, interpreter, or sandbox
 left in the hot path. The proven bytecode is the safety artifact; the
@@ -115,7 +161,7 @@ verification is paid once at load time, execution is fast forever.
 
 A program only does something once it is *attached* to a hook point:
 the kernel invokes it as an event handler whenever the hooked event
-fires  fires: a packet arriving at a driver, a syscall, a security decision. a packet arriving at a driver, a syscall, a security decision.
+fires: a packet arriving at a driver, a syscall, a security decision.
 Loaded programs and their maps are reference-counted by the kernel and
 can be pinned to a filesystem path (bpffs) so they outlive the loader
 process @cilium-bpf-guide.
@@ -124,45 +170,45 @@ process @cilium-bpf-guide.
 
 eBPF code runs in kernel address space, where a single bad memory
 access corrupts the machine every process depends on. Since the
-requirement is certainty about *all* executions  executions, including inputs an including inputs an
-attacker crafts  attacker crafts, before before the program ever runs, runtime mechanisms are
+requirement is certainty about all executions, including inputs an
+attacker crafts, before the program ever runs, runtime mechanisms are
 categorically insufficient: a sandbox needs a floor below the kernel
-and there is none, and testing only covers the inputs somebody thought
+and there is none. Testing only covers the inputs somebody thought
 of @kernel-bpf-verifier. The verifier therefore *proves* safety by
 static analysis over all reachable paths, in two passes over a
 directed-acyclic graph of the program's control flow @hoiland2018xdp.
 
-The proof tracks an abstract state  state: register types, pointer offsets register types, pointer offsets
-and possible value ranges  ranges, through through every path, and enforces three
+The proof tracks an abstract state: register types, pointer offsets
+and possible value ranges, through every path, enforcing three
 families of checks:
 
-- *Termination.* General termination is undecidable, so the verifier
+- *Termination*: General termination is undecidable, so the verifier
   restricts the class of allowed programs instead: historically it
   required an acyclic control-flow graph (no loops at all), and modern
   kernels admit bounded loops within an instruction budget. The check
   is mechanical precisely because the program class is restricted.
-- *Memory safety.* Every load or store must be provably in bounds on
+- *Memory safety*: Every load or store must be provably in bounds on
   every path: packet accesses against the `data_end` pointer in the
   context, map values against the map's declared value size, stack
   accesses against ranges previously written. Bounds checks in the
-  program (e.g. `if (ptr + offset > data_end)`) are not a courtesy  not a courtesy:
-  they are how the programmer hands the verifier the proof, and the
+  program (e.g. `if (ptr + offset > data_end)`) are not a courtesy:
+  they are how the programmer hands the verifier the proof and the
   verifier refines ranges at every branch.
-- *Type safety.* Each register carries a type alongside its range, and
+- *Type safety*: Each register carries a type alongside its range and
   every instruction and helper call must be type-compatible: a packet
   pointer cannot be used as a map key, a map lookup's return must be
   checked for NULL before dereference. Type confusion is the classic
-  kernel exploitation primitive, and the verifier refuses to let a
+  kernel exploitation primitive and the verifier refuses to let a
   program create one @hoiland2018xdp.
 
 The verifier does *not* check that the program does what its author
 intended, nor that it is efficient; its sole purpose is protecting the
 kernel's internals @hoiland2018xdp. This makes it the trusted computing
 base (TCB) of every eBPF deployment: the component every other safety
-property depends on, and which must itself be trusted rather than
+property depends on and which must itself be trusted rather than
 verified. The analysis is also an
 over-approximation: at merge points, states are unioned and precision
-is lost, so correct programs can be rejected  rejected, the practical cost of the practical cost of
+is lost, so correct programs can be rejected, the practical cost of
 which grows with program complexity, as Jia et al. argue
 @jia2023untenable. PREVAIL @gershuni2019prevail formalizes the same
 analysis as an abstract interpretation with a machine-checked
@@ -171,21 +217,21 @@ in-kernel verifier cannot prove about itself.
 
 == Maps, ring buffers and helpers
 
-An eBPF program is an event handler: it is invoked, runs, and returns,
+An eBPF program is an event handler: it is invoked, runs and returns
 with no state that survives between invocations. Since nearly every
-security task needs memory across events  events: a rate limiter needs a rate limiter needs
-per-source counters, a policy needs its rule set  rule set; state must live state must live
-outside the program, and that object is the *map*: a typed key→value
+security task needs memory across events (a rate limiter needs
+per-source counters, a policy needs its rule set), state must live
+outside the program and that object is the *map*: a typed key $->$ value
 store allocated by the kernel, read and written by programs through
-helper calls, and equally reachable from user space @hoiland2018xdp
+helper calls and equally reachable from user space @hoiland2018xdp
 @kernel-bpf-docs. Maps thus serve three roles at once: persistent
 storage between invocations, coordination between programs attached at
-different hooks, and the kernel↔user-space channel that a control
+different hooks and the kernel $<->$ user-space channel that a control
 plane reads and updates.
 
 The map type encodes the access pattern. Security-relevant ones
-include hash maps (key→value lookup, e.g. per-IP counters), arrays
-(index→value), LPM tries (longest-prefix match, the data structure
+include hash maps (key $->$ value lookup, e.g. per-IP counters), arrays
+(index $->$ value), LPM tries (longest-prefix match, the data structure
 behind CIDR-based policy), per-CPU variants (each CPU has its own copy,
 so hot-path updates never take a lock), and ring buffers, which
 stream events to user space with per-CPU buffers and reserved records.
@@ -199,7 +245,7 @@ Maps are also where *policy* lives. A confinement system's LSM
 programs are generic; which container may open which file is data in a
 map the trusted user-space agent loads. This split (enforcement
 logic in the kernel, policy as data) is the pattern every system in
-@section-systems follows, and also the attack surface He et al.
+@section-systems follows and also the attack surface He et al.
 exploit @he2023crosscontainer.
 
 == Portability: BTF and CO-RE
@@ -207,8 +253,8 @@ exploit @he2023crosscontainer.
 An eBPF program compiled against one kernel's structures will not load on
 another: offsets of fields in `struct` sock, or even the presence of a
 field, differ across kernel versions and configurations. The classic
-answers , or  compile per kernel, or require vendors to keep stable
-kernels ,  both break the "policy as data" deployment model of §2.3.
+answers, or compile per kernel, or require vendors to keep stable
+kernels,  both break the "policy as data" deployment model of §2.3.
 
 BPF CO-RE ("Compile Once, Run Everywhere") fixes this with a division of
 labour @libbpf-bootstrap @kernel-bpf-docs:
@@ -222,8 +268,8 @@ labour @libbpf-bootstrap @kernel-bpf-docs:
   does not exist, a well-named compatibility check (`bpf_core_field_exists`)
   lets the program take a fallback path.
 
-The verifier's guarantees are unaffected :  the program is patched *before*
-verification , so  so safety is not traded for portability. For security
+The verifier's guarantees are unaffected:  the program is patched *before*
+verification, so safety is not traded for portability. For security
 tooling this is what makes one shipped policy binary run across a fleet of
 heterogeneous kernels, the deployment assumption both Cilium and the
 research systems of @section-systems make.
@@ -231,12 +277,12 @@ research systems of @section-systems make.
 == Verifier safety vs. authorization to load
 
 #note-box(label: "Key distinction required by the brief")[
-  The verifier answers _"is this program safe to run in the kernel?"_; the
-  privilege model answers _"who may load and attach it?"_. A program the
-  verifier accepts can still be malicious.
+  The verifier answers _"is this program safe to run in the kernel?"_. \
+  The privilege model answers _"who may load and attach it?"_. \
+  A program the verifier accepts can still be malicious.
 ]
 
-The privilege model is separate from, and older than, the verifier: it
+The privilege model is separate from and older than the verifier: it
 decides who may reach the `bpf()` system call's privileged commands at all.
 
 - *Root as gatekeeper.* Historically, loading eBPF programs required
@@ -244,19 +290,19 @@ decides who may reach the `bpf()` system call's privileged commands at all.
   whoever can load programs already holds kernel-wide power
   @hoiland2018xdp.
 - *The modern split.* Since kernel 5.8 the monolith is divided: loading
-  programs uses `CAP_BPF` (plus `CAP_PERFMON` for kprobes/tracepoints, and
-  `CAP_NET_ADMIN` for network-attached programs) ,  narrow, purpose-built
+  programs uses `CAP_BPF` (plus `CAP_PERFMON` for kprobes/tracepoint and
+  `CAP_NET_ADMIN` for network-attached programs),  narrow, purpose-built
   capabilities instead of "effectively root".
 - *Unprivileged BPF.* Classic-BPF filters (socket filters, seccomp) are
   loadable without privileges; `kernel.unprivileged_bpf_disabled` disables
-  exactly this path, and distributions increasingly ship it off by default
+  exactly this path and distributions increasingly ship it off by default
   [1][2].
 - *Delegation without privilege.* A container or service should be able to
   load *its own* programs without holding host capabilities. The BPF token
   mechanism (merged for kernel 6.9's bpffs delegation) enables this: a
   privileged manager creates a token tied to a bpffs subtree and hands the
   token's file descriptor to the container, which can then load programs
-  and create maps ,  scoped to that subtree, not to the host [3][4].
+  and create maps, scoped to that subtree, not to the host [3][4].
 
 The distinction matters for the threat model of section 5: every "who may
 load what" question is answered on this layer, not the verifier's.
@@ -269,17 +315,17 @@ load what" question is answered on this layer, not the verifier's.
 
 The same verified bytecode means different things depending on where
 it is attached: the hook determines what the program can see, what it
-can enforce, and what each decision costs. XDP runs in the driver
-*before* the `sk_buff` exists  exists, so the program sees the raw frame and the program sees the raw frame and
-parses headers itself, and its drop is the cheapest decision the kernel
+can enforce and what each decision costs. XDP runs in the driver
+*before* the socket buffer (`sk_buff`/skb) exists, so the program sees the raw frame and
+parses headers itself and its drop is the cheapest decision the kernel
 can make about a packet, which is why it is the first-line defense
 against volumetric attacks @hoiland2018xdp. tc hooks sit after the skb
 is built: parsed headers, flow state and marks are already available,
-so decisions that depend on stack context  context (per-flow classification, per-flow classification,
-rate limiting, egress filtering  filtering) belong there. belong there. Tracepoints and
+so decisions that depend on stack context (per-flow classification,
+rate limiting, egress filtering) belong there. Tracepoints and
 kprobes are not on the packet path at all: they attach to kernel
 execution and observe the arguments of kernel functions (stable
-pre-chosen events vs. near-arbitrary instructions  instructions, stability against stability against
+pre-chosen events vs. near-arbitrary instructions, stability against
 reach). cgroup/socket hooks see operations of a workload's sockets.
 BPF LSM attaches to the kernel's permission checks and is the only
 hook whose return value is a *verdict*: it is what turns a system from
@@ -293,7 +339,7 @@ need comes into existence.*
     columns: (auto, 1fr, 1fr, 1fr, auto),
     align: (left, left, left, left, left),
     table.header[Hook][Context available][Enforcement actions][Overhead][Position],
-    [XDP],          [Raw frame, pre-skb],  [Drop, pass, TX, redirect], [Cheapest; line rate], [driver RX],
+    [XDP], [Raw frame, pre-skb], [Drop, pass, TX (bounce out same NIC), redirect], [Cheapest; line rate], [ingress, in driver],
     [tc],           [Post-skb, headers parsed], [Drop, accept, redirect, classify], [skb cost already paid], [ingress/egress],
     [cgroup/socket],[Workload, socket],    [Deny or restrict socket ops], [Per-socket, no skb cost], [socket layer],
     [kprobe/tracepoint], [Kernel function args], [Observe only],        [Low], [anywhere],
@@ -306,16 +352,16 @@ need comes into existence.*
 A server under a volumetric attack receives millions of junk packets
 per second, identifiable as garbage from header bytes alone. Header
 bytes are present in the raw frame, so identification does not require
-stack context  context, and and under attack the weapon is *cost per packet*, so
+stack context and under attack the weapon is *cost per packet*, so
 the deciding factor is which drop is cheapest. XDP is the answer: the
 program parses IP/TCP headers itself and drops the flood before the
-kernel allocates an `sk_buff`, so the attack's packets never cost more
+kernel allocates a `sk_buff`, so the attack's packets never cost more
 than a few instructions each; the XDP paper's DoS experiment shows
 mitigation at line rate while the stack is saturated @hoiland2018xdp.
 State the filter needs between packets (per-source counters, rate
 windows) lives in per-CPU maps, so the hot path never contends. tc
 *can* filter the same bytes, but each drop happens after the skb is
-already paid for  paid for: the wrong economics for a flood, the right ones the wrong economics for a flood, the right ones
+already paid for: the wrong economics for a flood, the right ones
 once per-flow state or egress policy matters. The conventional
 baseline, nftables, sits in the stack after skb allocation; comparing
 the two is Assignment #2's throughput measurement.
@@ -325,26 +371,26 @@ the two is Assignment #2's throughput measurement.
 Consider the same server, now running untrusted workloads in containers,
 with a policy requirement: *only the image-fetch service may open
 connections to the registry network; no container may bind the host's
-service ports*. This question is not about packets but about *who is
-allowed to initiate what* , and  and the identity "which container initiated
+service ports*. This question is not about packets, but about *who is
+allowed to initiate what* and the identity "which container initiated
 this socket operation" does not exist at XDP's layer at all. The
 information comes into existence where the socket operation is performed,
 so the program attaches there: cgroup/socket hooks see the workload's
-`connect(2)`, `bind(2)` and friends with the cgroup context attached, and
-return a verdict that restricts that workload's sockets ,  enforcement
-without parsing a single packet. State (which container may reach which
+`connect(2)`, `bind(2)` and friends with the cgroup context attached; then 
+returns a verdict that restricts that workload's sockets (enforcement
+without parsing a single packet). State (which container may reach which
 network) lives in maps updated by the trusted user-space agent, shared
 with the enforcement program.
 
-This mirrors use case A's shape  ( identify, decide in-kernel, keep
-state in maps ) but  but the *question* chose a different hook, one layer away
+This mirrors use case A's shape (identify, decide in-kernel, keep
+state in maps), but the *question* chose a different hook, one layer away
 from the network. It is also BPFContain's starting point, one hook family
-further out: attach to the LSM checks that guard socket operations, and
+further out: attach to the LSM checks that guard socket operations and
 the same policy now covers containers uniformly, with credentials in the
 context rather than in the socket @findlay2021bpfcontain @kernel-bpf-lsm.
 Both use cases together define the scope for Assignment #2: XDP answers
 "what may this packet do", the socket/LSM family answers "what may this
-workload do", and a secure system needs the answer to both.
+workload do" and a secure system needs the answer to both.
 
 #pagebreak()
 
@@ -354,16 +400,16 @@ workload do", and a secure system needs the answer to both.
 
 Cilium applies the eBPF substrate to *networking policy*: instead of IP
 addresses and port rules, it identifies workloads by labels carried into the
-kernel as identity, and enforces policy at the L3/L4 and HTTP layers
-@cilium-bpf-guide. Enforcement attaches where the traffic already flows , 
-XDP or tc at ingress/egress, and socket-level programs for per-workload
-rules , so  so the same identity model drives routing, load balancing and
+kernel as identity and enforces policy at the L3/L4 and HTTP layers
+@cilium-bpf-guide. Enforcement attaches where the traffic already flows, 
+XDP or tc at ingress/egress and socket-level programs for per-workload
+rules, so the same identity model drives routing, load balancing and
 policy in one place.
 
 Tetragon, from the same ecosystem, targets *process and kernel behaviour*
 rather than the network: tracing policies attach kprobes and tracepoints to
 security-relevant kernel functions, correlate events with the process,
-credentials and container that caused them, and can enforce by denying the
+credentials and container that caused them and can enforce by denying the
 call before it completes @tetragon. Because a policy is data  ( YAML saying
 "watch these functions, filter on these arguments" ),  the in-kernel logic
 stays generic while the site-specific rules live in user space, the same
@@ -378,22 +424,22 @@ one coherent mechanism.
 
 bpfbox is the proof of concept: per-process confinement policies that can
 restrict at the *userspace function*, *system call*, *LSM hook* and
-*kernelspace function* boundaries ,  granularity no existing mechanism
+*kernelspace function* boundaries,  granularity no existing mechanism
 offers, in under 2000 lines of in-kernel code @findlay2020bpfbox. A policy
 can require, for example, that `execve` calls originate in a specific
 function of the confined binary, not just that certain binaries may be
 executed. In its web-server benchmark, alerting on every security operation
-costs about 8.4% throughput ,  slightly less than AppArmor in a comparable
-configuration ,  showing the generality is affordable.
+costs about 8.4% throughput,  slightly less than AppArmor in a comparable
+configuration,  showing the generality is affordable.
 
 BPFContain, by the same authors, generalizes bpfbox from processes to
 *containers*: a YAML policy language with default-deny and default-allow
-modes, semantically meaningful permissions on top of the raw LSM API, and
+modes, semantically meaningful permissions on top of the raw LSM API and
 integration with existing container managers without modifying their source
 @findlay2021bpfcontain. Its diagnosis is the inverse of Tetragon's
 opportunity: the kernel has no unified container abstraction, so isolation
 is today a mishmash of mechanisms whose combined policies are hard to
-audit , and  and a failure in any one exposes the container. eBPF's LSM hooks
+audit and a failure in anyone of them exposes the container. eBPF's LSM hooks
 close that semantic gap at runtime, with no kernel patches.
 
 == Comparison
@@ -419,8 +465,8 @@ itself a finding, one the prototype of Assignment #2 will treat as a
 baseline to produce.
 
 The two lines answer different questions. Production systems assume the
-orchestration model and buy into it ,  identity from labels, events from
-the runtime ,  trading generality for operational simplicity. Research
+orchestration model and buy into it,  identity from labels, events from
+the runtime,  trading generality for operational simplicity. Research
 systems start from the threat model: what a confined process should be
 able to do, expressed directly against kernel boundaries, at the cost of
 writing and auditing policy without a manager's help. The substrate is the
