@@ -99,7 +99,7 @@
   v(0.3cm)
   {
     set align(left)
-    text(20pt, weight: "bold", title)
+    align(center, text(20pt, weight: "bold", title))
     if subtitle != none { v(0.1em); align(text(12pt, fill: muted, subtitle), center); v(0.2em) }
     if institution != none { align(text(9pt, fill: muted, institution), center); v(0.2em)}
     v(0.4em)
@@ -108,7 +108,16 @@
     grid(
       columns: (1fr, auto),
       align: (left + top, right + top),
-      authors.map(a => [#a.name #if "id" in a { text(fill: muted, "(" + a.id + ")") }]).join(linebreak()),
+      grid(
+        columns: (auto, auto),
+        column-gutter: 0.5em,
+        row-gutter: 0.45em,
+        align: (left + top, left + top),
+        ..authors.map(a => (
+          text[#a.name],
+          if "id" in a { text(fill: muted, "(" + a.id + ")") } else { [] },
+        )).flatten(),
+      ),
       text(fill: muted)[#course \ #date.display("[day] [month repr:long] [year]")],
     )
   }
