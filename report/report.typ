@@ -692,7 +692,7 @@ directly, and the privilege audit is part of the evaluation.
 @fig-prototype shows the whole flow.
 
 #figure(
-  image("figures/prototype.svg", width: 95%),
+  image("figures/architecture.svg", width: 95%),
   placement: bottom,
   caption: [Prototype flow. Inbound packets meet the XDP program in the
   driver and are dropped or passed before an `sk_buff` exists; container

@@ -28,7 +28,7 @@ maps, updated at runtime by the controller — no program reloads.
 
 ![Prototype architecture: a user-space controller feeding maps shared with
 an XDP ingress layer and a cgroup/socket
-layer](report/figures/prototype.svg)
+layer](report/figures/architecture.svg)
 
 ### Layer 1 — XDP ingress (packets)
 

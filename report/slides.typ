@@ -213,7 +213,7 @@
 
 // ══ 7b. Prototype flow ══
 #figslide[Prototype flow][
-  #align(center)[#image("figures/prototype.svg", height: 10.6cm)]
+  #align(center)[#image("figures/architecture.svg", height: 10.6cm)]
 ]
 
 #pagebreak()
