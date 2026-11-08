@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <signal.h>
 #include <getopt.h>
 
@@ -15,63 +16,105 @@
 
 static Controller ctl;
 
-static void on_signal(int sig) {
+static void on_signal(i32 sig) {
   (void)sig;
   ctl.running = false;
 }
 
-static void usage(const char* name) {
+/* argv strings are NUL-terminated, so the str8 can still be handed to libc/libbpf */
+static str8 arg_str8(char* arg) {
+  return string8_create(strlen(arg), (u8*)arg);
+}
+
+static void usage(const str8 name) {
   fprintf(stderr,
-    "usage: %s -i <ifname> -c <cgroup-path> -r <rules> [-p <pin-dir>] [-g] [-n <s_cidr>]\n"
+    "usage: %.*s -i <ifname> -c <cgroup-path> -r <rules> [-p <pin-dir>] [-g] [-n <s_cidr>]\n"
     "  -g  generic (SKB) XDP mode\n"
     "  -n  CIDR map size (benchmarks: 1000, 10000, 100000)\n",
-    name
+    STR8_FMT(name)
   );
 }
 
-int main(int argc, char** argv) {
+i32 main(i32 argc, char** argv) {
   FirewallOpts opts = {0};
-  const char* rules = NULL;
+  str8 rules = STR8_NULL;
 
   i32 opt;
   while ((opt = getopt(argc, argv, "i:c:r:p:gn:h")) != -1) {
     switch (opt) {
-      case 'i': opts.ifname      = optarg;                   break;
-      case 'c': opts.cgroup_path = optarg;                   break;
-      case 'r': rules            = optarg;                   break;
-      case 'p': opts.pin_dir     = optarg;                   break;
-      case 'g': opts.xdp_generic = true;                     break;
-      case 'n': opts.s_cidr      = (u32)strtoul(optarg, NULL, 10); break;
-      default:  usage(argv[0]); return EXIT_FAILURE;
+      case 'i': {
+        opts.ifname = arg_str8(optarg);
+        break;
+      }
+      case 'c': {
+        opts.cgroup_path = arg_str8(optarg);
+        break;
+      }
+      case 'r': {
+        rules = arg_str8(optarg);
+        break;
+      }
+      case 'p': {
+        opts.pin_dir = arg_str8(optarg);
+        break;
+      }
+      case 'g': {
+        opts.xdp_generic = true;
+        break;
+      }
+      case 'n': {
+        opts.s_cidr = (u32)strtoul(optarg, NULL, 10);
+        break;
+      }
+      default: {
+        usage(arg_str8(argv[0]));
+        return EXIT_FAILURE;
+      }
     }
   }
 
-  if (opts.ifname == NULL || opts.cgroup_path == NULL || rules == NULL) {
-    usage(argv[0]);
+  if (opts.ifname.str == NULL || opts.cgroup_path.str == NULL || rules.str == NULL) {
+    usage(arg_str8(argv[0]));
     return EXIT_FAILURE;
   }
 
   Firewall* fw = NULL;
   error8 err = FW_OK;
 
-  if ((err = firewall_open(&fw, &opts))         != FW_OK) goto fail;
-  if ((err = firewall_attach(fw))               != FW_OK) goto fail;
-  if ((err = firewall_pin(fw))                  != FW_OK) goto fail;
-  if ((err = controller_init(&ctl, fw))         != FW_OK) goto fail;
-  if ((err = controller_load_rules(&ctl, rules)) != FW_OK) goto fail;
+  err = firewall_open(&fw, &opts);
+  if (err != FW_OK)
+    goto fail;
+
+  err = firewall_attach(fw);
+  if (err != FW_OK)
+    goto fail;
+
+  err = firewall_pin(fw);
+  if (err != FW_OK)
+    goto fail;
+
+  err = controller_init(&ctl, fw);
+  if (err != FW_OK)
+    goto fail;
+
+  err = controller_load_rules(&ctl, rules);
+  if (err != FW_OK)
+    goto fail;
 
   signal(SIGINT,  on_signal);
   signal(SIGTERM, on_signal);
 
-  while (ctl.running)
-    if ((err = controller_poll(&ctl, 100)) != FW_OK && err != FW_ERR_AGAIN)
+  while (ctl.running) {
+    err = controller_poll(&ctl, 100);
+    if (err != FW_OK && err != FW_ERR_AGAIN)
       break;
+  }
 
   controller_dump_counters(&ctl, stdout);
 
 fail:
   if (err != FW_OK)
-    fprintf(stderr, "fw: %s\n", error_str(err));
+    fprintf(stderr, "fw: %.*s\n", STR8_FMT(error_str(err)));
 
   controller_free(&ctl);
   firewall_close(fw);

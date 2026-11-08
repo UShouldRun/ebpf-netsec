@@ -12,6 +12,8 @@
  * * Rules:
  * - Fixed-width types and explicit padding only: both compilers must agree on the layout.
  * - Hash keys are compared byte-for-byte, so pads must be zeroed before every lookup/update.
+ *
+ * * The struct bodies are suggestions in comments: pick the layouts, then fill them in.
  */
 
 #include "utils.h"
@@ -23,15 +25,16 @@
 #define FW_MAX_CGROUP   1024
 #define FW_RINGBUF_SIZE (256 * 1024) /* bytes, power of 2 */
 
-typedef enum fw_reason {
+enum fw_reason {
   FW_REASON_NONE = 0,
   FW_REASON_CIDR,                    /* layer 1 */
   FW_REASON_PORT,
   FW_REASON_RATE,
   FW_REASON_CONNECT,                 /* layer 2 */
   FW_REASON_BIND
-} FwReason;
+};
 
+typedef enum   fw_reason     FwReason;
 typedef struct fw_cidr_key   FwCidrKey;
 typedef struct fw_port_key   FwPortKey;
 typedef struct fw_cgroup_key FwCgroupKey;
@@ -41,58 +44,81 @@ typedef struct fw_rate_state FwRateState;
 typedef struct fw_counter    FwCounter;
 typedef struct fw_event      FwEvent;
 
-struct fw_cidr_key {  /* LPM trie key: prefixlen must come first */
-  u32 prefixlen;
-  u32 addr;           /* network order */
+struct fw_cidr_key {
+  /* Suggestion (LPM trie key):
+   *   u32
+   *     prefixlen,  // prefix length in bits; an LPM trie key must start with it
+   *     addr;       // IPv4 address, network order
+   */
 };
 
 struct fw_port_key {
-  u16 port;           /* host order */
-  u8  proto;          /* IPPROTO_TCP / IPPROTO_UDP */
-  u8  pad;
+  /* Suggestion:
+   *   u16 port;  // destination port, host order
+   *   u8
+   *     proto,   // IPPROTO_TCP / IPPROTO_UDP
+   *     pad;     // explicit padding, zeroed: hash keys compare byte-for-byte
+   */
 };
 
 struct fw_cgroup_key {
-  u64 cgroup_id;      /* inode of the cgroup v2 directory */
-  u16 port;           /* host order */
-  u8  proto;
-  u8  pad[5];
+  /* Suggestion:
+   *   u64 cgroup_id;  // workload identity: inode of its cgroup v2 directory
+   *   u16 port;       // destination port, host order
+   *   u8
+   *     proto,        // IPPROTO_TCP / IPPROTO_UDP
+   *     pad[5];       // explicit padding to 16 bytes, zeroed
+   */
 };
 
-struct fw_rule {      /* value of every rule map */
-  u32 id;             /* index into fw_counters */
+struct fw_rule {
+  /* Suggestion (value of every rule map):
+   *   u32 id;  // rule index: which counter slot a match increments
+   */
 };
 
-struct fw_rate_cfg {  /* single entry, fw_rate_cfg[0] */
-  u64 rate;           /* tokens per second */
-  u64 burst;          /* bucket size */
+struct fw_rate_cfg {
+  /* Suggestion (rate limiter configuration):
+   *   u64
+   *     rate,   // tokens added per second
+   *     burst;  // bucket capacity: the largest burst allowed
+   */
 };
 
 struct fw_rate_state {
-  u64 tokens;
-  u64 last_ns;
+  /* Suggestion (per-source token bucket):
+   *   u64
+   *     tokens,   // tokens left in this source's bucket
+   *     last_ns;  // time of the last refill (bpf_ktime_get_ns)
+   */
 };
 
 struct fw_counter {
-  u64 packets;
-  u64 bytes;
+  /* Suggestion (per-rule, per-CPU):
+   *   u64
+   *     packets,  // packets that matched the rule
+   *     bytes;    // bytes of those packets
+   */
 };
 
-struct fw_event {     /* ring buffer record, one per sampled drop */
-  u64 ts_ns;
-  u64 cgroup_id;      /* 0 on layer 1 */
-  u32 rule_id;
-  u32 saddr;          /* network order */
-  u32 daddr;
-  u16 sport;          /* host order */
-  u16 dport;
-  u8  proto;
-  u8  reason;         /* FwReason */
-  u8  pad[6];
+struct fw_event {
+  /* Suggestion (one drop log record):
+   *   u64
+   *     ts_ns,      // when the drop happened
+   *     cgroup_id;  // workload that was denied (0 on layer 1)
+   *   u32
+   *     rule_id,    // rule that matched
+   *     saddr,      // source address, network order
+   *     daddr;      // destination address, network order
+   *   u16
+   *     sport,      // source port, host order
+   *     dport;      // destination port, host order
+   *   u8
+   *     proto,      // IPPROTO_*
+   *     reason,     // FwReason: which check dropped it
+   *     pad[6];     // explicit padding to 40 bytes
+   */
 };
-
-_Static_assert(sizeof(FwCgroupKey) == 16, "FwCgroupKey layout");
-_Static_assert(sizeof(FwEvent)     == 40, "FwEvent layout");
 
 #ifndef __bpf__
 

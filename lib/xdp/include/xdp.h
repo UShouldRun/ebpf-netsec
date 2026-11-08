@@ -20,26 +20,27 @@
 #define ETH_P_IP   0x0800 /* macros are not in vmlinux.h */
 #define ETH_P_IPV6 0x86DD
 
-typedef struct xdp_packet XdpPacket;
-
-struct xdp_packet {
-  u32
-    saddr,   // network order
-    daddr,   // network order
-    s_pkt;   // data_end - data, for the byte counters
-
-  u16
-    sport,   // host order, 0 if not TCP/UDP
-    dport;
-
-  u8 proto;
-};
-
-typedef enum xdp_parse_result {
+enum xdp_parse_result {
   XDP_PARSE_OK = 0,
   XDP_PARSE_SHORT,       /* truncated header: let the stack decide */
   XDP_PARSE_NOT_IPV4,    /* TODO: IPv6 */
   XDP_PARSE_FRAGMENT     /* non-first fragment: no L4 header */
-} XdpParseResult;
+};
+
+typedef enum   xdp_parse_result XdpParseResult;
+typedef struct xdp_packet       XdpPacket;
+
+struct xdp_packet {
+  /* Suggestion (what the parser extracts for the checks):
+   *   u32
+   *     saddr,   // source address, network order
+   *     daddr,   // destination address, network order
+   *     s_pkt;   // packet size (data_end - data), for the byte counters
+   *   u16
+   *     sport,   // source port, host order (0 if not TCP/UDP)
+   *     dport;   // destination port, host order
+   *   u8 proto;  // IPPROTO_*
+   */
+};
 
 #endif // !__XDP_H__

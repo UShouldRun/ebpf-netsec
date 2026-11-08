@@ -19,13 +19,15 @@
 
 #define CONTROLLER_ARENA_MIN KB(64) /* floor; load_rules grows it to fit the file */
 
-typedef enum rule_kind {
+enum rule_kind {
   RULE_CIDR = 0,
   RULE_PORT,
   RULE_RATE,
   RULE_CONNECT,
   RULE_BIND
-} RuleKind;
+};
+
+typedef enum rule_kind RuleKind;
 
 error8 __controller_parse_line   (Controller* ctl, const str8 line, const u32 rule_id);
 
@@ -37,6 +39,6 @@ error8 __controller_rule_bind    (Controller* ctl, const vector(str8)* args, con
 
 error8 __controller_cgroup_id    (const str8 path, u64* cgroup_id);
 
-i32    __controller_on_event     (void* ctx, void* data, size_t s_data); /* ring_buffer_sample_fn */
+i32    __controller_on_event     (void* ctx, void* data, u64 s_data); /* ring_buffer_sample_fn (u64 == size_t on LP64) */
 
 #endif // !__CONTROLLER_PRIVATE_H__

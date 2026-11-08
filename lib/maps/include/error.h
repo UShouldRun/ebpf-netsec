@@ -8,7 +8,7 @@
  * @brief Firewall error codes: 0 is success, every error is positive and fits in a u8
  */
 
-typedef enum fw_error {
+enum fw_error {
   FW_OK = 0,
 
   /* Generic */
@@ -51,14 +51,20 @@ typedef enum fw_error {
   FW_ERR_RB_POLL,
 
   FW_ERR_MAX /* keep last; must stay <= 255 */
-} FwError;
+};
+
+typedef enum fw_error FwError;
 
 _Static_assert(FW_ERR_MAX <= 255, "FwError must fit in a u8");
 
 typedef u8 error8;
 
 #ifndef __bpf__
-const char* error_str (const error8 err);
+
+#include <string8/string8.h>
+
+str8 error_str (const error8 err);
+
 #endif
 
 #endif // !__FW_ERROR_H__

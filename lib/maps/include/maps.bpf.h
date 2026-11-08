@@ -11,80 +11,90 @@
  * - Every .bpf.c includes this header, so each object carries its own copy of the maps.
  * - When `bpftool gen object` links them into fw.bpf.o, identical weak definitions merge
  * into one map, so XDP and the cgroup hooks share the same counters and ring buffer.
+ *
+ * * Each map below is a suggestion in a comment. Declare it as
+ *   struct { __uint(type, ...); __uint(max_entries, ...); __type(key, ...); __type(value, ...); } name SEC(".maps") __weak;
  */
 
 #include "maps.h"
 
 // ================# LAYER 1 #================
 
-struct {
-  __uint(type, BPF_MAP_TYPE_LPM_TRIE);
-  __uint(map_flags, BPF_F_NO_PREALLOC); /* mandatory for LPM */
-  __uint(max_entries, FW_MAX_CIDR);
-  __type(key, FwCidrKey);
-  __type(value, FwRule);
-} fw_cidr SEC(".maps") __weak;
+/* fw_cidr: CIDR blocklist (layer 1)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_LPM_TRIE  // longest-prefix match on the source address
+ *   map_flags    BPF_F_NO_PREALLOC      // required by LPM tries
+ *   max_entries  FW_MAX_CIDR
+ *   key          FwCidrKey
+ *   value        FwRule                 // which rule matched
+ */
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, FW_MAX_PORTS);
-  __type(key, FwPortKey);
-  __type(value, FwRule);
-} fw_ports SEC(".maps") __weak;
+/* fw_ports: port/protocol denylist (layer 1)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_HASH  // exact match
+ *   max_entries  FW_MAX_PORTS
+ *   key          FwPortKey
+ *   value        FwRule
+ */
 
-struct {
-  __uint(type, BPF_MAP_TYPE_ARRAY);
-  __uint(max_entries, 1);
-  __type(key, u32);
-  __type(value, FwRateCfg);
-} fw_rate_cfg SEC(".maps") __weak;
+/* fw_rate_cfg: rate limiter configuration (layer 1)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_ARRAY  // single slot, written by the controller
+ *   max_entries  1
+ *   key          u32
+ *   value        FwRateCfg
+ */
 
-struct {
-  __uint(type, BPF_MAP_TYPE_LRU_PERCPU_HASH); /* per-CPU: the limit is per CPU */
-  __uint(max_entries, FW_MAX_RATE);
-  __type(key, u32);                           /* saddr, network order */
-  __type(value, FwRateState);
-} fw_rate SEC(".maps") __weak;
+/* fw_rate: per-source rate state (layer 1)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_LRU_PERCPU_HASH  // LRU: spoofed floods can't fill it; per-CPU: no locks, limit is per CPU
+ *   max_entries  FW_MAX_RATE
+ *   key          u32                           // source address, network order
+ *   value        FwRateState
+ */
 
 // ================# LAYER 2 #================
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, FW_MAX_CGROUP);
-  __type(key, FwCgroupKey);                   /* allow-list */
-  __type(value, FwRule);
-} fw_cg_connect SEC(".maps") __weak;
+/* fw_cg_connect: connect allow-list (layer 2)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_HASH
+ *   max_entries  FW_MAX_CGROUP
+ *   key          FwCgroupKey        // workload + destination
+ *   value        FwRule
+ */
 
-struct {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __uint(max_entries, FW_MAX_PORTS);
-  __type(key, FwPortKey);                     /* host service ports: deny */
-  __type(value, FwRule);
-} fw_cg_bind SEC(".maps") __weak;
+/* fw_cg_bind: host service ports no workload may bind (layer 2)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_HASH
+ *   max_entries  FW_MAX_PORTS
+ *   key          FwPortKey
+ *   value        FwRule
+ */
 
 // ================# SHARED #================
 
-struct {
-  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-  __uint(max_entries, FW_MAX_RULES);
-  __type(key, u32);                           /* rule id */
-  __type(value, FwCounter);
-} fw_counters SEC(".maps") __weak;
+/* fw_counters: per-rule counters (both layers)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_PERCPU_ARRAY  // indexed by rule id, no contention
+ *   max_entries  FW_MAX_RULES
+ *   key          u32                        // rule id
+ *   value        FwCounter
+ */
 
-struct {
-  __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, FW_RINGBUF_SIZE);
-} fw_events SEC(".maps") __weak;
+/* fw_events: drop log to user space (both layers)
+ * Suggestion:
+ *   type         BPF_MAP_TYPE_RINGBUF
+ *   max_entries  FW_RINGBUF_SIZE       // bytes, power of 2
+ */
 
 /* Shared helpers for both layers. */
 
 static __always_inline void fw_count(const u32 rule_id, const u32 s_bytes) {
-  /* TODO: lookup fw_counters[rule_id] (NULL check), packets++, bytes += s_bytes */
+  /* TODO: account one hit (and its bytes) to the rule */
 }
 
 static __always_inline void fw_log(const FwEvent* event) {
-  /* TODO: bpf_ringbuf_reserve(&fw_events, sizeof *event, 0) → copy → submit;
-   *       drop silently when the ring is full (never block the data path) */
+  /* TODO: hand the event to user space without ever blocking the data path */
 }
 
 #endif // !__MAPS_BPF_H__

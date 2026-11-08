@@ -9,38 +9,33 @@
 
 static __always_inline XdpParseResult __xdp_parse(struct xdp_md* ctx, XdpPacket* pkt) {
   void
-    *data     = (void*)(long)ctx->data,
-    *data_end = (void*)(long)ctx->data_end;
+    *data     = (void*)(u64)ctx->data,
+    *data_end = (void*)(u64)ctx->data_end;
 
-  /* TODO: ethhdr (bounds) → h_proto == bpf_htons(ETH_P_IP)
-   *       → iphdr (bounds, then ihl * 4 bounds) → skip if frag_off & 0x1FFF
-   *       → tcphdr / udphdr (bounds) → fill pkt */
+  /* TODO: extract the fields the rules need, safely */
   (void)data; (void)data_end; (void)pkt;
   return XDP_PARSE_SHORT;
 }
 
 static __always_inline bool __xdp_match_cidr(const XdpPacket* pkt, u32* rule_id) {
-  /* TODO: FwCidrKey key = { .prefixlen = 32, .addr = pkt->saddr };
-   *       bpf_map_lookup_elem(&fw_cidr, &key) */
+  /* TODO: is the source in a blocked prefix? */
   return false;
 }
 
 static __always_inline bool __xdp_match_port(const XdpPacket* pkt, u32* rule_id) {
-  /* TODO: FwPortKey key = { .port = pkt->dport, .proto = pkt->proto }; (pad zeroed)
-   *       bpf_map_lookup_elem(&fw_ports, &key) */
+  /* TODO: is the destination port/protocol denied? */
   return false;
 }
 
 static __always_inline bool __xdp_over_rate(const XdpPacket* pkt, u32* rule_id) {
-  /* TODO: token bucket on fw_rate[saddr] with fw_rate_cfg[0];
-   *       now = bpf_ktime_get_ns(); refill, then take one token or drop */
+  /* TODO: is the source over its rate? */
   return false;
 }
 
 // ================# PROGRAM #================
 
 SEC("xdp")
-int fw_xdp(struct xdp_md* ctx) {
+i32 fw_xdp(struct xdp_md* ctx) {
   XdpPacket pkt = {0};
 
   if (__xdp_parse(ctx, &pkt) != XDP_PARSE_OK)
@@ -59,8 +54,8 @@ int fw_xdp(struct xdp_md* ctx) {
   if (reason == FW_REASON_NONE)
     return XDP_PASS;
 
-  fw_count(rule_id, pkt.s_pkt);
-  /* TODO: sample (e.g. bpf_get_prandom_u32() % N == 0) before logging */
-  /* TODO: build FwEvent from pkt + reason, fw_log(&event) */
+  fw_count(rule_id, 0); /* TODO: packet size */
+  /* TODO: log the drop */
+
   return XDP_DROP;
 }

@@ -22,18 +22,17 @@
  */
 
 struct firewall {
-  struct fw_bpf* skel;
-
-  struct bpf_link
-    *xdp,
-    *connect4,
-    *bind4;
-
-  i32
-    ifindex,
-    cgroup_fd;
-
-  FirewallOpts opts;
+  /* Suggestion:
+   *   struct fw_bpf* skel;  // generated skeleton: programs and maps
+   *   struct bpf_link
+   *     *xdp,               // layer 1 attachment
+   *     *connect4,          // layer 2 attachments
+   *     *bind4;
+   *   i32
+   *     ifindex,            // interface XDP is attached to
+   *     cgroup_fd;          // cgroup the hooks are attached to
+   *   FirewallOpts opts;    // copy of the options it was opened with
+   */
 };
 
 error8 __firewall_resize      (Firewall* fw);                   /* bpf_map__set_max_entries, before load */

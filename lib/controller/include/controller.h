@@ -37,17 +37,17 @@ struct ring_buffer; /* libbpf, opaque */
 typedef struct controller Controller;
 
 struct controller {
-  Firewall* fw;
-  struct ring_buffer* events;
-  Arena* arena;          // rule-load scratch, reset after every load
-
-  u32 s_rules;
-
-  volatile bool running; // cleared by the signal handler
+  /* Suggestion:
+   *   Firewall* fw;                // the loaded firewall it drives
+   *   struct ring_buffer* events;  // consumer of the drop log
+   *   Arena* arena;                // rule-load scratch, reset after every load
+   *   u32 s_rules;                 // rules loaded = next rule id
+   *   volatile bool running;       // cleared by the signal handler (main.c uses it)
+   */
 };
 
 error8 controller_init          (Controller* ctl, Firewall* fw);
-error8 controller_load_rules    (Controller* ctl, const char* path);
+error8 controller_load_rules    (Controller* ctl, const str8 path);
 error8 controller_dump_counters (Controller* ctl, FILE* file);
 error8 controller_poll          (Controller* ctl, const i32 timeout_ms);
 void   controller_free          (Controller* ctl);

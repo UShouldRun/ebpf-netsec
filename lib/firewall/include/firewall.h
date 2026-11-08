@@ -15,33 +15,15 @@
  *
  * * Lifecycle:
  * - firewall_open:   open skeleton → resize maps → load (the verifier runs here).
- * - firewall_attach: XDP on opts->ifname, connect4/bind4 on opts->cgroup_path.
- * - firewall_pin:    pin links and maps under opts->pin_dir, so the firewall outlives
+ * - firewall_attach: XDP on the interface, connect4/bind4 on the cgroup.
+ * - firewall_pin:    pin links and maps in bpffs, so the firewall outlives
  * the controller and a restarted controller can reuse the maps (no reload).
  * - firewall_close:  detach and free (pinned objects stay in bpffs).
  *
  * * Privileges: CAP_BPF + CAP_NET_ADMIN only (never CAP_SYS_ADMIN), plus write access to bpffs.
  */
 
-typedef struct firewall      Firewall;
-typedef struct firewall_opts FirewallOpts;
-
-struct firewall_opts {
-  const char
-    *ifname,      // XDP interface, e.g. "eth0"
-    *cgroup_path, // cgroup v2 parent, e.g. "/sys/fs/cgroup/fw.slice"
-    *pin_dir;     // bpffs directory, NULL = don't pin
-
-  u32
-    s_cidr,       // max entries, 0 = FW_MAX_CIDR
-    s_ports,      // max entries, 0 = FW_MAX_PORTS
-    s_rate,       // max entries, 0 = FW_MAX_RATE
-    s_cgroup;     // max entries, 0 = FW_MAX_CGROUP
-
-  bool xdp_generic; // SKB mode for veth / VMs (slower, say so in the benchmarks)
-};
-
-typedef enum fw_map {
+enum fw_map {
   FW_MAP_CIDR = 0,
   FW_MAP_PORTS,
   FW_MAP_RATE_CFG,
@@ -51,7 +33,26 @@ typedef enum fw_map {
   FW_MAP_COUNTERS,
   FW_MAP_EVENTS,
   FW_MAP_COUNT /* keep last */
-} FwMap;
+};
+
+typedef enum   fw_map        FwMap;
+typedef struct firewall      Firewall;
+typedef struct firewall_opts FirewallOpts;
+
+struct firewall_opts {
+  /* Suggestion (main.c is written against these; str8 not const so main can fill them in):
+   *   str8
+   *     ifname,          // XDP interface, e.g. "eth0"
+   *     cgroup_path,     // cgroup v2 parent, e.g. "/sys/fs/cgroup/fw.slice"
+   *     pin_dir;         // bpffs directory, STR8_NULL = don't pin
+   *   u32
+   *     s_cidr,          // CIDR map entries, 0 = FW_MAX_CIDR (the 1k/10k/100k runs)
+   *     s_ports,         // port map entries, 0 = FW_MAX_PORTS
+   *     s_rate,          // tracked sources, 0 = FW_MAX_RATE
+   *     s_cgroup;        // cgroup policy entries, 0 = FW_MAX_CGROUP
+   *   bool xdp_generic;  // SKB mode for veth / VMs (slower; state it in the benchmarks)
+   */
+};
 
 error8 firewall_open   (Firewall** fw, const FirewallOpts* opts);
 error8 firewall_attach (Firewall* fw);
