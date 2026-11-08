@@ -78,6 +78,49 @@ same rules, CPU overhead, latency, map sizes at 1k/10k/100k rules — and a
 | M5 | Threat-model validation: privilege audit + map-tamper test    | 4    |
 | M6 | Reproducibility artefacts: fresh VM from the README runs it    | 4    |
 
+## Build
+
+Requires Linux ≥ 5.9 with BTF (`/sys/kernel/btf/vmlinux`) and cgroup v2;
+developed on 6.8 (Ubuntu 24.04).
+
+```sh
+sudo apt install clang llvm libbpf-dev libelf-dev zlib1g-dev
+make            # → build/fw
+```
+
+The makefile runs the eBPF pipeline:
+
+1. `bpftool btf dump` → `build/vmlinux.h` (CO-RE types of the running kernel)
+2. `clang -target bpf` → one object per `lib/*/src/*.bpf.c`
+3. `bpftool gen object` → `build/fw.bpf.o` (links both layers; shared maps merge)
+4. `bpftool gen skeleton` → `build/fw.skel.h` (typed API used by `lib/firewall`)
+5. `gcc` → `build/fw`, linked with `-lbpf -lelf -lz`
+
+User-side code is built with `-ffunction-sections -fdata-sections` and
+linked with `--gc-sections`, so only the vendored library functions that
+are actually called end up in the binary.
+
+### Layout
+
+| Path              | Side   | Role                                                      |
+|-------------------|--------|-----------------------------------------------------------|
+| `lib/maps`        | both   | shared map types, map definitions, error codes            |
+| `lib/xdp`         | kernel | layer 1: XDP ingress program                              |
+| `lib/cgroup`      | kernel | layer 2: `cgroup/connect4`, `cgroup/bind4`                |
+| `lib/firewall`    | user   | skeleton lifecycle: open, load, attach, pin               |
+| `lib/controller`  | user   | rule file → maps, counters, drop log                      |
+| `lib/vendor`      | user   | `string8`, `alloc`, `vector`, `pair` ([UShouldRun](https://github.com/UShouldRun)) |
+| `src/main.c`      | user   | CLI entry point                                           |
+
+### Run
+
+```sh
+sudo build/fw -i <ifname> -c /sys/fs/cgroup/<slice> -r rules.conf [-p /sys/fs/bpf/fw] [-g]
+```
+
+`-g` selects generic (SKB) XDP for veth/VMs. Rule file syntax is
+documented in `lib/controller/include/controller.h`.
+
 ## More on eBPF
 
 A longer technical introduction — verifier internals, hook-by-hook
